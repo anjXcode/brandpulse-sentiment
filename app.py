@@ -2,10 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import re
+import time
 import joblib
 import pickle
 import nltk
 import plotly.express as px
+from datetime import datetime, timedelta
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from tensorflow.keras.models import load_model
@@ -64,7 +66,6 @@ def predict_sentiment(text, model_choice):
     else:
         vec = tfidf.transform([cleaned])
         probs = lr_model.predict_proba(vec)[0]
-        # Ensure class probability order matches ['negative', 'neutral', 'positive']
         class_order = list(lr_model.classes_)
         probs = np.array([probs[class_order.index(lbl)] for lbl in LABELS])
     
@@ -88,14 +89,18 @@ st.sidebar.info(
 st.title("✈️ BrandPulse AI — Customer Sentiment Dashboard")
 st.markdown("Real-time social media sentiment monitoring powered by **Classical NLP** and **Deep Learning (LSTM)**.")
 
-tab1, tab2 = st.tabs(["🔍 Live Tweet Analyzer", "📊 Batch CSV Insights"])
+tab1, tab2, tab3 = st.tabs([
+    "🔍 Live Tweet Analyzer",
+    "📡 Live Stream & 24-Hour Trends",
+    "📊 Batch CSV Insights"
+])
 
 # --- TAB 1: SINGLE TWEET ANALYZER ---
 with tab1:
     st.subheader("Analyze Single Customer Tweet or Feedback")
     user_input = st.text_area(
         "Enter tweet or review text:",
-        placeholder="e.g., The flight was delayed by 3 hours with zero updates from the staff!",
+        placeholder="e.g., The service was amazing!",
         height=110
     )
 
@@ -130,8 +135,91 @@ with tab1:
         else:
             st.warning("Please enter some text before clicking Analyze.")
 
-# --- TAB 2: BATCH CSV UPLOAD ---
+# --- TAB 2: LIVE STREAM SIMULATION & 24-HOUR TREND LINE (PHASE 4) ---
 with tab2:
+    st.subheader("Real-Time Incoming Tweet Stream & 24-Hour Brand Sentiment Trend")
+    st.caption(f"Active Classification Engine: **{model_choice}**")
+
+    sample_stream_tweets = [
+        "The service was amazing! Best flight experience this year.",
+        "I waited 4 hours just to get a cold burger and zero flight updates.",
+        "How can I check my flight status or change my seat reservation?",
+        "Smooth boarding, friendly cabin crew, and arrived 15 minutes early!",
+        "Lost my checked bag again and customer support put me on hold for an hour.",
+        "Can you confirm the baggage allowance for international flights?",
+        "Super comfortable seats and great in-flight entertainment!",
+        "Flight delayed twice with no gate announcement, completely frustrated.",
+        "What time does check-in open for morning departures?",
+        "Thank you to the ground staff for helping me catch my connecting flight!",
+        "Terrible legroom and broken tray table on a 5-hour flight.",
+        "Where do I apply my frequent flyer miles for an upgrade?"
+    ]
+
+    if st.button("▶️ Start / Refresh Live Tweet Stream", type="primary"):
+        stream_placeholder = st.empty()
+        chart_placeholder = st.empty()
+        stream_records = []
+        now = datetime.now()
+
+        for i, tweet in enumerate(sample_stream_tweets):
+            pred_label, probs, _ = predict_sentiment(tweet, model_choice)
+            confidence = float(np.max(probs) * 100)
+            # Spread timestamps across the last 24 hours for trend visualization
+            tweet_time = now - timedelta(hours=(len(sample_stream_tweets) - 1 - i) * 2)
+
+            stream_records.append({
+                "Timestamp": tweet_time.strftime("%Y-%m-%d %H:00"),
+                "Hour": tweet_time,
+                "Incoming Tweet": tweet,
+                "Sentiment": pred_label.capitalize(),
+                "Confidence (%)": round(confidence, 1)
+            })
+
+            live_df = pd.DataFrame(stream_records)
+
+            # Live Feed Table
+            with stream_placeholder.container():
+                st.markdown("#### 📥 Live Incoming Tweet Feed")
+                st.dataframe(
+                    live_df[["Timestamp", "Incoming Tweet", "Sentiment", "Confidence (%)"]].iloc[::-1],
+                    use_container_width=True,
+                    height=260
+                )
+
+            # Live Pie Chart + 24-Hour Trend Line
+            with chart_placeholder.container():
+                c1, c2 = st.columns(2)
+                with c1:
+                    dist_df = live_df["Sentiment"].value_counts().reset_index()
+                    dist_df.columns = ["Sentiment", "Count"]
+                    pie_fig = px.pie(
+                        dist_df, names="Sentiment", values="Count", hole=0.4,
+                        color="Sentiment",
+                        color_discrete_map={"Negative": "#e74c3c", "Neutral": "#f1c40f", "Positive": "#2ecc71"},
+                        title="Live Sentiment Distribution (%)"
+                    )
+                    st.plotly_chart(pie_fig, use_container_width=True)
+
+                with c2:
+                    trend_df = (
+                        live_df.groupby(["Hour", "Sentiment"])
+                        .size()
+                        .reset_index(name="Tweet Volume")
+                        .sort_values("Hour")
+                    )
+                    trend_fig = px.line(
+                        trend_df, x="Hour", y="Tweet Volume", color="Sentiment", markers=True,
+                        color_discrete_map={"Negative": "#e74c3c", "Neutral": "#f1c40f", "Positive": "#2ecc71"},
+                        title="Sentiment Trend Over the Last 24 Hours"
+                    )
+                    st.plotly_chart(trend_fig, use_container_width=True)
+
+            time.sleep(0.35)
+    else:
+        st.info("Click **▶️ Start / Refresh Live Tweet Stream** to simulate incoming tweets, live Pie Chart updates, and the 24-hour sentiment trend line.")
+
+# --- TAB 3: BATCH CSV UPLOAD ---
+with tab3:
     st.subheader("Batch Sentiment Analysis on Customer Dataset")
     uploaded_file = st.file_uploader("Upload a CSV file containing a 'text' column", type=["csv"])
 
@@ -140,7 +228,7 @@ with tab2:
         if 'text' not in batch_df.columns:
             st.error("The uploaded CSV must contain a column named `'text'`.")
         else:
-            sample_df = batch_df.head(200).copy()  # Cap at 200 rows for instant UI responsiveness
+            sample_df = batch_df.head(200).copy()
             st.info(f"Analyzing first {len(sample_df)} rows using **{model_choice}**...")
             
             preds = [predict_sentiment(t, model_choice)[0] for t in sample_df['text']]
